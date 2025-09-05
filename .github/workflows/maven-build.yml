@@ -1,10 +1,8 @@
-name: Maven Build
+name: Maven Build (PR Only)
 
 on:
-  push:
-    branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main" ]   # Runs only for PRs targeting main
 
 jobs:
   build:
@@ -22,6 +20,17 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # Step 3: Build (without storing artifacts)
+      # Step 3: Build (no artifact storage)
       - name: Build with Maven
         run: mvn clean install -B
+
+      # Step 4: Comment on PR if build succeeds
+      - name: Comment build success
+        if: success()
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: build-status
+          message: |
+            ✅ **Build succeeded!**
+            - Branch: `${{ github.head_ref }}`
+            - Commit: `${{ github.sha }}`
