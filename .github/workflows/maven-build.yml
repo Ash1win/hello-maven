@@ -37,30 +37,41 @@ jobs:
       - name: Run Tests with Coverage
         run: mvn clean verify -B
 
-      # Step 5: Run diff-cover on changed code
-      - name: Coverage on New Code
-        id: coverage
+      # Step 5: Compute coverage on new code
+      - name: Run diff-cover
+        id: diffcover
         run: |
-          # Fetch target branch for comparison
           git fetch origin ${{ github.base_ref }} --depth=1
-
-          # Run diff-cover against JaCoCo XML
           diff-cover target/site/jacoco/jacoco.xml \
             --compare-branch=origin/${{ github.base_ref }} \
             --fail-under=80 > diff_cover.txt || true
 
-          echo "coverage=$(grep -oP '(\d+)%' diff_cover.txt | head -1 | tr -d '%')" >> $GITHUB_OUTPUT
+          # Extract coverage percentage
+          COVERAGE=$(grep -oP '(\d+)%' diff_cover.txt | head -1 | tr -d '%')
+          echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
 
-      # Step 6: Enforce Threshold
-      - name: Check Coverage Threshold
+      # Step 6: Annotate uncovered lines inline in PR
+      - name: Annotate uncovered lines
+        if: always()
         run: |
-          if [ ${{ steps.coverage.outputs.coverage }} -lt 80 ]; then
-            echo "❌ Coverage on new code below threshold: ${{ steps.coverage.outputs.coverage }}%"
+          while IFS= read -r line; do
+            if [[ "$line" =~ (.+):([0-9]+) ]]; then
+              FILE="${BASH_REMATCH[1]}"
+              LINENO="${BASH_REMATCH[2]}"
+              echo "::warning file=$FILE,line=$LINENO::Line not covered by tests"
+            fi
+          done < <(grep -oP '.*\.java:\d+' diff_cover.txt)
+
+      # Step 7: Fail if below threshold
+      - name: Enforce Coverage Threshold
+        run: |
+          if [ ${{ steps.diffcover.outputs.coverage }} -lt 80 ]; then
+            echo "❌ Coverage on new code below threshold: ${{ steps.diffcover.outputs.coverage }}%"
             exit 1
           fi
 
-      # Step 7: PR Comment
-      - name: Comment Coverage on PR
+      # Step 8: Comment summary on PR
+      - name: Comment Coverage Summary
         if: always()
         uses: marocchino/sticky-pull-request-comment@v2
         with:
@@ -71,6 +82,8 @@ jobs:
             - Commit: `${{ github.sha }}`
 
             ### 🧪 Test Coverage on New Code
-            - Coverage: **${{ steps.coverage.outputs.coverage }}%**
+            - Coverage: **${{ steps.diffcover.outputs.coverage }}%**
             - Threshold: **80%**
-            - Status: ${{ steps.coverage.outputs.coverage < 80 && '❌ Failed' || '🟢 Passed' }}
+            - Status: ${{ steps.diffcover.outputs.coverage < 80 && '❌ Failed' || '🟢 Passed' }}
+
+            ⚠️ Inline annotations have been added to highlight uncovered lines.
