@@ -1,4 +1,4 @@
-name: Maven Build & SonarQube (PR Only)
+name: Maven Build + New Code Coverage (PR Only)
 
 on:
   pull_request:
@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout code
+      # Step 1: Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -24,38 +24,53 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # Step 3: Build project
-      - name: Build with Maven
-        run: mvn clean install -B
+      # Step 3: Install Python (for diff-cover)
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
 
-      # Step 4: Decorate PR with build + SonarQube results (dummy for now)
-      - name: Comment build & SonarQube results
-        if: always() # runs even if build fails
+      - name: Install diff-cover
+        run: pip install diff-cover
+
+      # Step 4: Build, Run Tests & Generate Coverage
+      - name: Run Tests with Coverage
+        run: mvn clean verify -B
+
+      # Step 5: Run diff-cover on changed code
+      - name: Coverage on New Code
+        id: coverage
+        run: |
+          # Fetch target branch for comparison
+          git fetch origin ${{ github.base_ref }} --depth=1
+
+          # Run diff-cover against JaCoCo XML
+          diff-cover target/site/jacoco/jacoco.xml \
+            --compare-branch=origin/${{ github.base_ref }} \
+            --fail-under=80 > diff_cover.txt || true
+
+          echo "coverage=$(grep -oP '(\d+)%' diff_cover.txt | head -1 | tr -d '%')" >> $GITHUB_OUTPUT
+
+      # Step 6: Enforce Threshold
+      - name: Check Coverage Threshold
+        run: |
+          if [ ${{ steps.coverage.outputs.coverage }} -lt 80 ]; then
+            echo "❌ Coverage on new code below threshold: ${{ steps.coverage.outputs.coverage }}%"
+            exit 1
+          fi
+
+      # Step 7: PR Comment
+      - name: Comment Coverage on PR
+        if: always()
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: build-status
           message: |
-            📝 **Build & Analysis Report**
+            ✅ **Build & Tests Succeeded!**
             - Branch: `${{ github.head_ref }}`
             - Commit: `${{ github.sha }}`
 
-            ### ✅ Build Status
-            ${{ job.status }}
-
-            ### 🛡️ SonarQube Quality Gate
-            ✔️ **Passed**
-            <!-- Replace with ❌ Failed if real quality gate fails -->
-
-            ### 🔎 SonarQube Issues (dummy data)
-            - 🐞 **Bugs**: 4  
-            - 🔒 **Vulnerabilities**: 2  
-            - 🧹 **Code Smells**: 7  
-            - 🚨 **Security Hotspots**: 1  
-
-            ### 📊 Details
-            - Report: [View in SonarQube](https://sonarqube.example.com/dashboard?id=hello-maven)
-            - Example Issues:
-              - 🔒 [VULN-123: SQL Injection risk](https://sonarqube.example.com/project/issues?id=hello-maven&issues=VULN-123)
-              - 🐞 [BUG-456: Null pointer exception](https://sonarqube.example.com/project/issues?id=hello-maven&issues=BUG-456)
-              - 🧹 [SMELL-789: Method too complex](https://sonarqube.example.com/project/issues?id=hello-maven&issues=SMELL-789)
-              - 🚨 [HOTSPOT-101: Review HTTP usage](https://sonarqube.example.com/project/issues?id=hello-maven&issues=HOTSPOT-101)
+            ### 🧪 Test Coverage on New Code
+            - Coverage: **${{ steps.coverage.outputs.coverage }}%**
+            - Threshold: **80%**
+            - Status: ${{ steps.coverage.outputs.coverage < 80 && '❌ Failed' || '🟢 Passed' }}
